@@ -170,10 +170,13 @@ class Engine:
             logits_by_id.update({request.request_id: logits[row] for row, request in enumerate(to_forward)})
             break
 
+        sampled_tokens = [
+            (request, int(logits_by_id[request.request_id].argmax().item()))
+            for request in running
+        ]
         emitted_at = time.perf_counter() - self._clock_origin if self._clock_origin is not None else now
         finished = []
-        for request in running:
-            token = int(logits_by_id[request.request_id].argmax().item())
+        for request, token in sampled_tokens:
             request.prefill_logits = None
             request.generated_tokens.append(token)
             if request.first_token_time is None:
