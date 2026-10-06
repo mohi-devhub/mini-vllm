@@ -86,7 +86,7 @@ results/p95_latency_vs_rate.png
 results/memory_vs_concurrency.png
 ```
 
-The notebook is a thin runner. Update its `REPOSITORY_URL` cell, then run it on a GPU runtime such as a 16 GB T4. It installs the repo, invokes the benchmark script, and displays the generated plots.
+The notebook is a thin runner configured to clone `https://github.com/mohi-devhub/mini-vllm.git`. Run it on a GPU runtime such as a 16 GB T4. It installs the repo, invokes the benchmark script, and displays the generated plots. The notebook uses plain Python subprocess calls so it works in notebook hosts that do not support IPython shell magics.
 
 ## Benchmark results
 
