@@ -90,22 +90,36 @@ The notebook is a thin runner configured to clone `https://github.com/mohi-devhu
 
 ## Benchmark results
 
-**Not measured yet.** This checkout has no cached GPT-2 checkpoint or GPU benchmark run. Fill this table and retain the generated plots after running the notebook; do not use illustrative or estimated numbers as results.
+Measured on an NVIDIA RTX PRO 6000 Blackwell Server Edition with PyTorch 2.11.0+cu130, GPT-2, 24 requests per trace, batch size 8, block size 16, and a 512-block pool. Each cell below is the median of three trials. Latencies are milliseconds, peak GPU memory is MiB, and throughput is output tokens/second. TTFT and end-to-end percentiles are the medians of the corresponding per-trial percentile values.
 
-| Configuration | Output throughput | TTFT p50 / p95 | E2E latency p50 / p95 / p99 | Peak GPU memory | Max concurrent sequences |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| Naive sequential, contiguous KV | _Run notebook_ | _Run notebook_ | _Run notebook_ | _Run notebook_ | _Run notebook_ |
-| Static batch, contiguous KV | _Run notebook_ | _Run notebook_ | _Run notebook_ | _Run notebook_ | _Run notebook_ |
-| Continuous batch, contiguous KV | _Run notebook_ | _Run notebook_ | _Run notebook_ | _Run notebook_ | _Run notebook_ |
-| Continuous batch, paged KV | _Run notebook_ | _Run notebook_ | _Run notebook_ | _Run notebook_ | _Run notebook_ |
+| Arrival rate | Configuration | Throughput | TTFT p50 / p95 | E2E p50 / p95 / p99 | Peak GPU memory | Max concurrent |
+| ---: | --- | ---: | ---: | ---: | ---: | ---: |
+| 2 req/s | Naive sequential | 33.95 | 8.34 / 163.24 | 135.99 / 482.28 / 509.87 | 538.0 | 1 |
+| 2 req/s | Static batch | 32.03 | 2306.14 / 5547.67 | 2785.05 / 6058.85 / 7014.59 | 820.8 | 8 |
+| 2 req/s | Continuous, contiguous KV | 33.97 | 8.41 / 18.04 | 107.40 / 528.01 / 569.81 | 538.0 | 2 |
+| 2 req/s | Continuous, paged KV | 33.95 | 11.25 / 25.08 | 109.39 / 544.46 / 580.47 | 1099.2 | 2 |
+| 4 req/s | Naive sequential | 45.67 | 7.97 / 74.00 | 51.54 / 181.88 / 217.31 | 496.8 | 1 |
+| 4 req/s | Static batch | 43.01 | 811.21 / 1617.04 | 940.84 / 1749.53 / 2062.14 | 560.1 | 8 |
+| 4 req/s | Continuous, contiguous KV | 45.64 | 9.05 / 20.25 | 57.17 / 188.20 / 226.96 | 498.1 | 3 |
+| 4 req/s | Continuous, paged KV | 45.62 | 11.37 / 26.96 | 61.99 / 192.73 / 245.01 | 1068.7 | 3 |
+| 8 req/s | Naive sequential | 98.99 | 14.31 / 405.17 | 133.50 / 508.01 / 542.63 | 537.8 | 1 |
+| 8 req/s | Static batch | 90.90 | 346.99 / 1070.58 | 674.04 / 1328.31 / 1529.25 | 823.9 | 8 |
+| 8 req/s | Continuous, contiguous KV | 106.62 | 9.89 / 33.68 | 129.76 / 450.14 / 582.41 | 551.2 | 5 |
+| 8 req/s | Continuous, paged KV | 102.31 | 13.62 / 41.99 | 136.19 / 545.91 / 702.39 | 1099.2 | 5 |
 
-Plots to fill after the notebook run:
+Peak active/reserved KV footprint from the same trials:
 
-- `results/throughput_vs_rate.png` — compare naive, static, and continuous batching to show the batching effect.
-- `results/p95_latency_vs_rate.png` — compare tail latency as offered arrival rate rises.
-- `results/memory_vs_concurrency.png` — compare resident paged blocks with max-length contiguous reservations at the measured concurrency. Total peak GPU memory is reported separately because the paged pool is preallocated.
+| Arrival rate | Contiguous max-length reservation | Paged resident blocks | Paged peak block utilization | Preemptions |
+| ---: | ---: | ---: | ---: | ---: |
+| 2 req/s | 14.84 MiB | 15.75 MiB | 2.73% | 0 |
+| 4 req/s | 6.75 MiB | 7.88 MiB | 1.37% | 0 |
+| 8 req/s | 25.25 MiB | 24.75 MiB | 4.30% | 0 |
 
-Interpret throughput gains by comparing batching strategies. Attribute paging's gain to cache memory efficiency by comparing paged and contiguous continuous batching at the same configured cache budget. Do not describe a paged-vs-contiguous throughput difference as a general batching speedup.
+The results show little throughput difference between naive sequential and continuous batching at 2 and 4 requests/sec. At 8 requests/sec, continuous contiguous KV reached 106.62 output tokens/sec versus 98.99 for naive sequential; paged KV reached 102.31. Static batching was slower at all three rates and had much higher TTFT because it waits for groups of eight requests before starting a batch.
+
+This run does not demonstrate a concurrency or GPU-memory advantage for paging. The paged and contiguous engines both reached 2, 3, and 5 concurrent sequences at the three rates, with no preemptions. The 512-block pool reached only 23 blocks in use at peak, so this workload did not create meaningful memory pressure. The paged pool is preallocated, which explains its higher total GPU-memory reading; compare the KV footprint rows separately from total GPU memory. A smaller cache budget or longer requests is needed to measure the concurrency benefit under pressure.
+
+Plots from this run are in `results/throughput_vs_rate.png`, `results/p95_latency_vs_rate.png`, and `results/memory_vs_concurrency.png`. Throughput differences between paged and contiguous KV should not be presented as the batching gain; this run shows paging's gather overhead and no measurable capacity gain at the configured budget.
 
 ## Limitations and next steps
 
