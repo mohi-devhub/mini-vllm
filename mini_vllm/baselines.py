@@ -85,6 +85,11 @@ def generate_static_batch(
         return {}
     if any(request.max_new_tokens <= 0 or not request.prompt_tokens for request in requests):
         raise ValueError("static batches require non-empty prompts and positive output lengths")
+    if any(
+        len(request.prompt_tokens) + request.max_new_tokens > model.config.max_position_embeddings
+        for request in requests
+    ):
+        raise ValueError("prompt plus output exceeds model position embeddings")
     max_steps = max(request.max_new_tokens for request in requests)
     device = model.wte.weight.device
     cache_map = {

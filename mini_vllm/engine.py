@@ -27,6 +27,8 @@ class Engine:
     ) -> None:
         if watermark_blocks < 0:
             raise ValueError("watermark_blocks cannot be negative")
+        if num_blocks <= 0 or block_size <= 0:
+            raise ValueError("num_blocks and block_size must be positive")
         if cache_mode not in {"paged", "contiguous"}:
             raise ValueError("cache_mode must be 'paged' or 'contiguous'")
         self.model = model.eval()
@@ -68,27 +70,22 @@ class Engine:
         admitted = []
         while self.scheduler.waiting and len(self.scheduler.running) < self.scheduler.max_batch_size:
             ordered = self.scheduler.policy.order(list(self.scheduler.waiting))
-            if self.cache_mode == "paged":
-                request = next(
-                    (
-                        candidate
-                        for candidate in ordered
-                        if self._prompt_blocks(candidate) + self.watermark_blocks <= self.pool.free_blocks
-                    ),
-                    None,
-                )
-            else:
-                request = next(
-                    (
-                        candidate
-                        for candidate in ordered
-                        if len(candidate.prompt_tokens)
+            request = None
+            for candidate in ordered:
+                if self.cache_mode == "paged":
+                    fits = self._prompt_blocks(candidate) + self.watermark_blocks <= self.pool.free_blocks
+                else:
+                    fits = (
+                        len(candidate.prompt_tokens)
                         + candidate.max_new_tokens
                         + self.watermark_blocks * self.block_size
                         <= self.cache.free_tokens
-                    ),
-                    None,
-                )
+                    )
+                if fits:
+                    request = candidate
+                    break
+                if not getattr(self.scheduler.policy, "can_bypass_blocked_request", False):
+                    break
             if request is None:
                 break
             self.scheduler.remove_waiting(request)

@@ -23,6 +23,10 @@ def generate_trace(
         raise ValueError("num_requests must be non-negative and arrival_rate positive")
     if vocab_size < 2:
         raise ValueError("vocab_size must be at least 2")
+    if min_prompt_tokens <= 0 or max_prompt_tokens < min_prompt_tokens:
+        raise ValueError("prompt length bounds must be positive and ordered")
+    if min_output_tokens <= 0 or max_output_tokens < min_output_tokens:
+        raise ValueError("output length bounds must be positive and ordered")
     rng = random.Random(seed)
     arrival_time = 0.0
     requests = []

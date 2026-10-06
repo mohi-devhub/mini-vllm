@@ -36,12 +36,16 @@ class AdmissionPolicy(Protocol):
 
 
 class FCFS:
+    can_bypass_blocked_request = False
+
     def order(self, requests: list[Request]) -> list[Request]:
         return requests
 
 
 class ShortestJobFirst:
     """Order requests by an estimated total prompt-plus-output length."""
+
+    can_bypass_blocked_request = True
 
     def order(self, requests: list[Request]) -> list[Request]:
         return sorted(requests, key=lambda request: request.length_estimate)

@@ -54,6 +54,15 @@ def test_shortest_job_first_uses_estimated_total_length() -> None:
     assert [request.request_id for request in admitted] == [2]
 
 
+def test_fcfs_does_not_skip_a_head_request_that_does_not_fit() -> None:
+    model = _tiny_model()
+    engine = Engine(model, num_blocks=2, block_size=4, max_batch_size=2, watermark_blocks=0)
+    engine.scheduler.enqueue(Request(41, [1] * 9, 2))
+    engine.scheduler.enqueue(Request(42, [2, 3], 2))
+    assert engine._admit() == []
+    assert [request.request_id for request in engine.scheduler.waiting] == [41, 42]
+
+
 def test_preemption_recomputes_state_and_preserves_outputs() -> None:
     model = _tiny_model()
     requests = [

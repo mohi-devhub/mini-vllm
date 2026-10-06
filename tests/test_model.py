@@ -32,8 +32,20 @@ def _compare(model: GPT2LM, reference: GPT2LMHeadModel) -> None:
     model.eval()
     reference.eval()
     # Right padded prompts of different lengths exercise both causal and padding masks.
-    input_ids = torch.tensor([[11, 29, 57, 91, 13], [42, 78, 0, 0, 0]])
-    attention_mask = torch.tensor([[1, 1, 1, 1, 1], [1, 1, 0, 0, 0]])
+    input_ids = torch.tensor(
+        [
+            [11, 29, 57, 91, 13, 0, 0, 0, 0],
+            [42, 78, 0, 0, 0, 0, 0, 0, 0],
+            [3, 7, 9, 17, 28, 31, 44, 55, 0],
+        ]
+    )
+    attention_mask = torch.tensor(
+        [
+            [1, 1, 1, 1, 1, 0, 0, 0, 0],
+            [1, 1, 0, 0, 0, 0, 0, 0, 0],
+            [1, 1, 1, 1, 1, 1, 1, 1, 0],
+        ]
+    )
     with torch.inference_mode():
         actual = model(input_ids, attention_mask)
         expected = reference(input_ids, attention_mask=attention_mask).logits
