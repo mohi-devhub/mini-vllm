@@ -44,7 +44,8 @@ class Engine:
         self.completed: dict[int, Request] = {}
 
     def _prompt_blocks(self, request: Request) -> int:
-        return (len(request.prompt_tokens) + self.block_size - 1) // self.block_size
+        length = len(request.context_tokens)
+        return (length + self.block_size - 1) // self.block_size
 
     def _admit(self) -> list[Request]:
         admitted = []
@@ -70,11 +71,11 @@ class Engine:
         if not requests:
             return
         device = self.model.wte.weight.device
-        max_prompt = max(len(request.prompt_tokens) for request in requests)
+        max_prompt = max(len(request.context_tokens) for request in requests)
         input_ids = torch.zeros((len(requests), max_prompt), dtype=torch.long, device=device)
         attention_mask = torch.zeros_like(input_ids)
         for row, request in enumerate(requests):
-            tokens = torch.tensor(request.prompt_tokens, dtype=torch.long, device=device)
+            tokens = torch.tensor(request.context_tokens, dtype=torch.long, device=device)
             input_ids[row, : tokens.numel()] = tokens
             attention_mask[row, : tokens.numel()] = 1
         position_ids = (attention_mask.cumsum(-1) - 1).clamp_min(0)
@@ -87,20 +88,32 @@ class Engine:
                 seq_ids=[request.request_id for request in requests],
             )
         for row, request in enumerate(requests):
-            request.prefill_logits = logits[row, len(request.prompt_tokens) - 1]
+            request.prefill_logits = logits[row, len(request.context_tokens) - 1]
+
+    def _preempt_latest(self) -> None:
+        if not self.scheduler.running:
+            raise MemoryError("paged KV block pool exhausted with no running request available to preempt")
+        request_id = next(reversed(self.scheduler.running))
+        request = self.scheduler.finish(request_id)
+        self.cache.free_sequence(request_id)
+        request.prefill_logits = None
+        self.scheduler.waiting.appendleft(request)
+        self.preemptions += 1
 
     def _decode(self, now: float) -> None:
-        running = list(self.scheduler.running.values())
-        if not running:
-            return
-        device = self.model.wte.weight.device
-        to_forward = [request for request in running if request.prefill_logits is None]
-        logits_by_id: dict[int, Tensor] = {
-            request.request_id: request.prefill_logits
-            for request in running
-            if request.prefill_logits is not None
-        }
-        if to_forward:
+        while True:
+            running = list(self.scheduler.running.values())
+            if not running:
+                return
+            device = self.model.wte.weight.device
+            to_forward = [request for request in running if request.prefill_logits is None]
+            logits_by_id: dict[int, Tensor] = {
+                request.request_id: request.prefill_logits
+                for request in running
+                if request.prefill_logits is not None
+            }
+            if not to_forward:
+                break
             last_tokens = torch.tensor(
                 [[request.generated_tokens[-1]] for request in to_forward], dtype=torch.long, device=device
             )
@@ -109,14 +122,20 @@ class Engine:
                 dtype=torch.long,
                 device=device,
             )
-            with torch.inference_mode():
-                logits = self.model(
-                    last_tokens,
-                    position_ids=positions,
-                    cache=self.cache,
-                    seq_ids=[request.request_id for request in to_forward],
-                )[:, -1]
+            try:
+                with torch.inference_mode():
+                    logits = self.model(
+                        last_tokens,
+                        position_ids=positions,
+                        cache=self.cache,
+                        seq_ids=[request.request_id for request in to_forward],
+                    )[:, -1]
+            except MemoryError:
+                # Restart the batch after freeing the most recently admitted sequence.
+                self._preempt_latest()
+                continue
             logits_by_id.update({request.request_id: logits[row] for row, request in enumerate(to_forward)})
+            break
 
         finished = []
         for request in running:

@@ -25,6 +25,11 @@ class Request:
             return self.estimated_total_tokens
         return len(self.prompt_tokens) + self.max_new_tokens
 
+    @property
+    def context_tokens(self) -> list[int]:
+        """Tokens needed to rebuild a preempted request's KV state."""
+        return self.prompt_tokens + self.generated_tokens
+
 
 class AdmissionPolicy(Protocol):
     def order(self, requests: list[Request]) -> list[Request]: ...
@@ -62,4 +67,3 @@ class Scheduler:
 
     def finish(self, request_id: int) -> Request:
         return self.running.pop(request_id)
-

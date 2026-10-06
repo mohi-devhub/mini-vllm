@@ -52,3 +52,20 @@ def test_shortest_job_first_uses_estimated_total_length() -> None:
     engine.scheduler.enqueue(requests[1])
     admitted = engine._admit()
     assert [request.request_id for request in admitted] == [2]
+
+
+def test_preemption_recomputes_state_and_preserves_outputs() -> None:
+    model = _tiny_model()
+    requests = [
+        Request(10, [3, 9, 15, 21], 7),
+        Request(20, [4, 10, 16, 22], 7),
+    ]
+    expected = {
+        request.request_id: generate_naive(model, request.prompt_tokens, request.max_new_tokens)
+        for request in requests
+    }
+    engine = Engine(model, num_blocks=4, block_size=4, max_batch_size=2, watermark_blocks=0)
+    actual = engine.run(requests)
+    assert engine.preemptions > 0
+    assert actual == expected
+    assert engine.pool.blocks_in_use == 0
