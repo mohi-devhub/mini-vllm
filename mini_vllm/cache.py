@@ -149,6 +149,7 @@ class PagedKVCache:
         table = self.block_tables[seq_id]
         if end_position and not set(range(end_position)).issubset(self._written_positions[seq_id]):
             raise ValueError(f"sequence {seq_id} has unwritten cache positions before {end_position}")
+        # This gather emulates the block-table indirection a custom paged-attention CUDA kernel uses.
         key_parts = []
         value_parts = []
         remaining = end_position
