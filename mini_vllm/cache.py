@@ -108,6 +108,7 @@ class PagedKVCache:
         self.pool = pool
         self.block_tables: dict[int, list[int]] = {}
         self._written_positions: dict[int, set[int]] = {}
+        self.peak_internal_fragmentation_tokens = 0
 
     def add_sequence(self, seq_id: int) -> None:
         if seq_id in self.block_tables:
@@ -144,6 +145,10 @@ class PagedKVCache:
             self.pool.storage[layer_idx, 0, physical_block, offset].copy_(key[:, token_index, :])
             self.pool.storage[layer_idx, 1, physical_block, offset].copy_(value[:, token_index, :])
         self._written_positions[seq_id].update(positions_list)
+        self.peak_internal_fragmentation_tokens = max(
+            self.peak_internal_fragmentation_tokens,
+            self.internal_fragmentation_tokens,
+        )
 
     def read(self, layer_idx: int, seq_id: int, end_position: int) -> tuple[Tensor, Tensor]:
         table = self.block_tables[seq_id]
@@ -182,3 +187,61 @@ class PagedKVCache:
         allocated_slots = sum(len(table) * self.pool.block_size for table in self.block_tables.values())
         used_slots = sum(len(positions) for positions in self._written_positions.values())
         return allocated_slots - used_slots
+
+
+class ContiguousCachePool:
+    """Continuous-batch cache that reserves each request's full token capacity."""
+
+    def __init__(
+        self,
+        num_layers: int,
+        capacity_tokens: int,
+        num_heads: int,
+        head_dim: int,
+        *,
+        device: torch.device | str,
+        dtype: torch.dtype,
+    ) -> None:
+        self.num_layers = num_layers
+        self.capacity_tokens = capacity_tokens
+        self.num_heads = num_heads
+        self.head_dim = head_dim
+        self.device = device
+        self.dtype = dtype
+        self.caches: dict[int, ContiguousKVCache] = {}
+        self.reserved_tokens: dict[int, int] = {}
+        self.peak_reserved_tokens = 0
+
+    @property
+    def free_tokens(self) -> int:
+        return self.capacity_tokens - sum(self.reserved_tokens.values())
+
+    @property
+    def reserved_total(self) -> int:
+        return sum(self.reserved_tokens.values())
+
+    def add_sequence(self, seq_id: int, capacity: int) -> None:
+        if seq_id in self.caches:
+            raise ValueError(f"sequence {seq_id} already has a contiguous cache")
+        if capacity > self.free_tokens:
+            raise MemoryError("contiguous KV reservation exceeds the token capacity")
+        self.caches[seq_id] = ContiguousKVCache(
+            self.num_layers,
+            capacity,
+            self.num_heads,
+            self.head_dim,
+            device=self.device,
+            dtype=self.dtype,
+        )
+        self.reserved_tokens[seq_id] = capacity
+        self.peak_reserved_tokens = max(self.peak_reserved_tokens, self.reserved_total)
+
+    def write(self, layer_idx: int, seq_id: int, positions: Tensor, key: Tensor, value: Tensor) -> None:
+        self.caches[seq_id].write(layer_idx, seq_id, positions, key, value)
+
+    def read(self, layer_idx: int, seq_id: int, end_position: int) -> tuple[Tensor, Tensor]:
+        return self.caches[seq_id].read(layer_idx, seq_id, end_position)
+
+    def free_sequence(self, seq_id: int) -> None:
+        self.caches.pop(seq_id)
+        self.reserved_tokens.pop(seq_id)

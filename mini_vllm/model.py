@@ -84,6 +84,9 @@ class CausalSelfAttention(nn.Module):
             for row, seq_id in enumerate(seq_ids):
                 valid = attention_mask[row].bool()
                 row_positions = position_ids[row, valid]
+                if not row_positions.numel():
+                    attended_rows.append(x.new_zeros((self.num_heads, query_len, self.head_dim)))
+                    continue
                 row_key = key[row, :, valid, :]
                 row_value = value[row, :, valid, :]
                 cache.write(self.layer_idx, seq_id, row_positions, row_key, row_value)

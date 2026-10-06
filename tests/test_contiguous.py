@@ -1,7 +1,8 @@
 import torch
 
-from mini_vllm.baselines import generate_naive
+from mini_vllm.baselines import generate_naive, generate_static_batch
 from mini_vllm.model import GPT2Config, GPT2LM
+from mini_vllm.scheduler import Request
 
 
 def _tiny_model() -> GPT2LM:
@@ -33,3 +34,18 @@ def test_contiguous_cache_capacity_error() -> None:
         assert "capacity 5" in str(exc)
     else:
         raise AssertionError("expected the cache to reject writes past its capacity")
+
+
+def test_static_batch_matches_naive_for_mixed_lengths() -> None:
+    model = _tiny_model()
+    requests = [
+        Request(1, [5, 11, 17, 23], 6),
+        Request(2, [7, 13], 2),
+        Request(3, [9, 15, 21], 4),
+    ]
+    actual = generate_static_batch(model, requests)
+    expected = {
+        request.request_id: generate_naive(model, request.prompt_tokens, request.max_new_tokens)
+        for request in requests
+    }
+    assert actual == expected

@@ -8,7 +8,7 @@ from collections.abc import Iterable
 import torch
 from torch import Tensor
 
-from mini_vllm.cache import BlockPool, PagedKVCache
+from mini_vllm.cache import BlockPool, ContiguousCachePool, PagedKVCache
 from mini_vllm.model import GPT2LM
 from mini_vllm.scheduler import AdmissionPolicy, Request, Scheduler
 
@@ -23,25 +23,42 @@ class Engine:
         max_batch_size: int = 8,
         watermark_blocks: int = 1,
         policy: AdmissionPolicy | None = None,
+        cache_mode: str = "paged",
     ) -> None:
         if watermark_blocks < 0:
             raise ValueError("watermark_blocks cannot be negative")
+        if cache_mode not in {"paged", "contiguous"}:
+            raise ValueError("cache_mode must be 'paged' or 'contiguous'")
         self.model = model.eval()
-        self.pool = BlockPool(
-            model.config.num_layers,
-            num_blocks,
-            block_size,
-            model.config.num_heads,
-            model.config.head_dim,
-            device=model.wte.weight.device,
-            dtype=model.wte.weight.dtype,
-        )
-        self.cache = PagedKVCache(self.pool)
+        self.cache_mode = cache_mode
+        if cache_mode == "paged":
+            self.pool = BlockPool(
+                model.config.num_layers,
+                num_blocks,
+                block_size,
+                model.config.num_heads,
+                model.config.head_dim,
+                device=model.wte.weight.device,
+                dtype=model.wte.weight.dtype,
+            )
+            self.cache = PagedKVCache(self.pool)
+        else:
+            self.pool = None
+            self.cache = ContiguousCachePool(
+                model.config.num_layers,
+                num_blocks * block_size,
+                model.config.num_heads,
+                model.config.head_dim,
+                device=model.wte.weight.device,
+                dtype=model.wte.weight.dtype,
+            )
         self.scheduler = Scheduler(max_batch_size, policy)
         self.block_size = block_size
         self.watermark_blocks = watermark_blocks
         self.preemptions = 0
         self.completed: dict[int, Request] = {}
+        self.max_concurrent_sequences = 0
+        self._clock_origin: float | None = None
 
     def _prompt_blocks(self, request: Request) -> int:
         length = len(request.context_tokens)
@@ -51,19 +68,38 @@ class Engine:
         admitted = []
         while self.scheduler.waiting and len(self.scheduler.running) < self.scheduler.max_batch_size:
             ordered = self.scheduler.policy.order(list(self.scheduler.waiting))
-            request = next(
-                (
-                    candidate
-                    for candidate in ordered
-                    if self._prompt_blocks(candidate) + self.watermark_blocks <= self.pool.free_blocks
-                ),
-                None,
-            )
+            if self.cache_mode == "paged":
+                request = next(
+                    (
+                        candidate
+                        for candidate in ordered
+                        if self._prompt_blocks(candidate) + self.watermark_blocks <= self.pool.free_blocks
+                    ),
+                    None,
+                )
+            else:
+                request = next(
+                    (
+                        candidate
+                        for candidate in ordered
+                        if len(candidate.prompt_tokens)
+                        + candidate.max_new_tokens
+                        + self.watermark_blocks * self.block_size
+                        <= self.cache.free_tokens
+                    ),
+                    None,
+                )
             if request is None:
                 break
             self.scheduler.remove_waiting(request)
             self.scheduler.start(request)
-            self.cache.add_sequence(request.request_id)
+            if self.cache_mode == "paged":
+                self.cache.add_sequence(request.request_id)
+            else:
+                self.cache.add_sequence(
+                    request.request_id,
+                    len(request.prompt_tokens) + request.max_new_tokens,
+                )
             admitted.append(request)
         return admitted
 
@@ -137,15 +173,16 @@ class Engine:
             logits_by_id.update({request.request_id: logits[row] for row, request in enumerate(to_forward)})
             break
 
+        emitted_at = time.perf_counter() - self._clock_origin if self._clock_origin is not None else now
         finished = []
         for request in running:
             token = int(logits_by_id[request.request_id].argmax().item())
             request.prefill_logits = None
             request.generated_tokens.append(token)
             if request.first_token_time is None:
-                request.first_token_time = now - request.arrival_time
+                request.first_token_time = emitted_at - request.arrival_time
             if len(request.generated_tokens) >= request.max_new_tokens:
-                request.finish_time = now - request.arrival_time
+                request.finish_time = emitted_at - request.arrival_time
                 finished.append(request.request_id)
 
         for request_id in finished:
@@ -156,6 +193,7 @@ class Engine:
     def step(self, now: float = 0.0) -> bool:
         """Admit, prefill, and emit one token for every currently running request."""
         admitted = self._admit()
+        self.max_concurrent_sequences = max(self.max_concurrent_sequences, len(self.scheduler.running))
         self._prefill(admitted)
         had_running = bool(self.scheduler.running)
         self._decode(now)
@@ -173,6 +211,7 @@ class Engine:
         if any(len(r.prompt_tokens) + r.max_new_tokens > self.model.config.max_position_embeddings for r in pending):
             raise ValueError("prompt plus output exceeds model position embeddings")
         start = time.perf_counter()
+        self._clock_origin = start
         cursor = 0
         while cursor < len(pending) or self.scheduler.waiting or self.scheduler.running:
             elapsed = time.perf_counter() - start

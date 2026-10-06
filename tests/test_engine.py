@@ -69,3 +69,20 @@ def test_preemption_recomputes_state_and_preserves_outputs() -> None:
     assert engine.preemptions > 0
     assert actual == expected
     assert engine.pool.blocks_in_use == 0
+
+
+def test_contiguous_continuous_engine_matches_naive() -> None:
+    model = _tiny_model()
+    requests = [Request(31, [3, 9, 15], 4), Request(32, [4, 10], 6)]
+    expected = {
+        request.request_id: generate_naive(model, request.prompt_tokens, request.max_new_tokens)
+        for request in requests
+    }
+    engine = Engine(
+        model,
+        num_blocks=16,
+        block_size=4,
+        max_batch_size=2,
+        cache_mode="contiguous",
+    )
+    assert engine.run(requests) == expected
