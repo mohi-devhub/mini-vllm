@@ -1,0 +1,29 @@
+{
+  "source": "Molab benchmark run reported by the project owner; values are medians of three trials.",
+  "gpu_model": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+  "torch_version": "2.11.0+cu130",
+  "model": "gpt2",
+  "requests_per_trace": 24,
+  "batch_size": 8,
+  "block_size": 16,
+  "configured_blocks": 512,
+  "arrival_rates_requests_per_second": [2, 4, 8],
+  "throughput_output_tokens_per_second": {
+    "naive_sequential": [33.95, 45.67, 98.99],
+    "static_batching": [32.03, 43.01, 90.90],
+    "contiguous_engine": [33.97, 45.64, 106.62],
+    "paged_engine": [33.95, 45.62, 102.31]
+  },
+  "latency_seconds_p95": {
+    "naive_sequential": [0.48228, 0.18188, 0.50801],
+    "static_batching": [6.05885, 1.74953, 1.32831],
+    "contiguous_engine": [0.52801, 0.18820, 0.45014],
+    "paged_engine": [0.54446, 0.19273, 0.54591]
+  },
+  "max_concurrent_sequences": [2, 3, 5],
+  "peak_kv_cache_mib": {
+    "contiguous_engine": [14.84, 6.75, 25.25],
+    "paged_engine": [15.75, 7.88, 24.75]
+  },
+  "paged_peak_block_utilization_percent": [2.73, 1.37, 4.30]
+}

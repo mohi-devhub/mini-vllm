@@ -6,3 +6,4 @@ dist/
 build/
 results/
 *.png
+!docs/benchmark-results/*.png

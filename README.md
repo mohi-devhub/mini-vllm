@@ -92,6 +92,22 @@ The notebook is a thin runner configured to clone `https://github.com/mohi-devhu
 
 Measured on an NVIDIA RTX PRO 6000 Blackwell Server Edition with PyTorch 2.11.0+cu130, GPT-2, 24 requests per trace, batch size 8, block size 16, and a 512-block pool. Each cell below is the median of three trials. Latencies are milliseconds, peak GPU memory is MiB, and throughput is output tokens/second. TTFT and end-to-end percentiles are the medians of the corresponding per-trial percentile values.
 
+### Charts
+
+These charts use the three-trial medians from the run above. The latency chart uses a logarithmic y-axis so the static-batching wait is visible alongside the continuous configurations. KV footprint is shown separately from total GPU memory, which includes the paged pool's preallocated storage.
+
+![Output throughput by arrival rate](docs/benchmark-results/throughput.png)
+
+![P95 end-to-end latency by arrival rate](docs/benchmark-results/p95_latency.png)
+
+![Peak KV footprint comparison for contiguous and paged caches](docs/benchmark-results/kv_footprint.png)
+
+The chart inputs are recorded in [`summary.json`](docs/benchmark-results/summary.json). Regenerate the images with:
+
+```bash
+python benchmarks/plot_measured_results.py
+```
+
 | Arrival rate | Configuration | Throughput | TTFT p50 / p95 | E2E p50 / p95 / p99 | Peak GPU memory | Max concurrent |
 | ---: | --- | ---: | ---: | ---: | ---: | ---: |
 | 2 req/s | Naive sequential | 33.95 | 8.34 / 163.24 | 135.99 / 482.28 / 509.87 | 538.0 | 1 |
